@@ -38,7 +38,7 @@ jobs:
       # 3. Tasks: help (root), zipRelease (app), lint (analysis), test (unit tests)
       - name: Generate Metadata XML
         run: |
-          ./gradlew --write-verification-metadata sha256,sha512 --dry-run help zipRelease lintVitalAnalyzeRelease test
+          ./gradlew --write-verification-metadata sha512 --dry-run help zipRelease lintVitalAnalyzeRelease test
 
       # This uploads the file so you can download it
       - name: Upload Verification Metadata

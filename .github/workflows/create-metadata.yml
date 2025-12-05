@@ -33,12 +33,16 @@ jobs:
           echo "RELEASE_KEYSTORE_PASSPHRASE=android" >> $GITHUB_ENV
 
       # THE IMPORTANT PART:
-      # 1. --write-verification-metadata: Calculates the checksums
-      # 2. --dry-run: fast, doesn't compile code, just resolves libs
-      # 3. Tasks: help (root), zipRelease (app), lint (analysis), test (unit tests)
+      # 1. Removed sha256 (only sha512 now)
+      # 2. Added ':app:dependencies --configuration releaseRuntimeClasspath' to catch libsu/jsoup
       - name: Generate Metadata XML
         run: |
-          ./gradlew --write-verification-metadata sha512 --dry-run help zipRelease lintVitalAnalyzeRelease test
+          ./gradlew --write-verification-metadata sha512 --dry-run \
+            help \
+            zipRelease \
+            lintVitalAnalyzeRelease \
+            test \
+            :app:dependencies --configuration releaseRuntimeClasspath
 
       # This uploads the file so you can download it
       - name: Upload Verification Metadata

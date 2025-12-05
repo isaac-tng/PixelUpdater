@@ -1,6 +1,5 @@
 name: Generate Verification Metadata
 
-# This trigger allows you to click a button in GitHub to run this
 on:
   workflow_dispatch:
 
@@ -21,7 +20,6 @@ jobs:
           java-version: 17
           cache: gradle
 
-      # We create a dummy keystore because 'zipRelease' might demand it exists
       - name: Generate dummy keystore
         run: |
           keytool -genkey -v -keystore debug.keystore -storetype PKCS12 -storepass android -alias androiddebugkey \
@@ -32,19 +30,17 @@ jobs:
           echo "RELEASE_KEY_PASSPHRASE=android" >> $GITHUB_ENV
           echo "RELEASE_KEYSTORE_PASSPHRASE=android" >> $GITHUB_ENV
 
-      # THE IMPORTANT PART:
-      # 1. Removed sha256 (only sha512 now)
-      # 2. Added ':app:dependencies --configuration releaseRuntimeClasspath' to catch libsu/jsoup
+      # FIX: Removed --dry-run and added mergeReleaseNativeLibs
+      # We rely on --write-verification-metadata to suppress errors while it updates the file.
       - name: Generate Metadata XML
         run: |
-          ./gradlew --write-verification-metadata sha512 --dry-run \
+          ./gradlew --write-verification-metadata sha512 \
             help \
             zipRelease \
             lintVitalAnalyzeRelease \
             test \
-            :app:dependencies --configuration releaseRuntimeClasspath
+            :app:mergeReleaseNativeLibs
 
-      # This uploads the file so you can download it
       - name: Upload Verification Metadata
         uses: actions/upload-artifact@v4
         with:

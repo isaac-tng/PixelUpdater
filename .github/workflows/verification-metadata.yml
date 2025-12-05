@@ -1,0 +1,48 @@
+name: Generate Verification Metadata
+
+# This trigger allows you to click a button in GitHub to run this
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      # We create a dummy keystore because 'zipRelease' might demand it exists
+      - name: Generate dummy keystore
+        run: |
+          keytool -genkey -v -keystore debug.keystore -storetype PKCS12 -storepass android -alias androiddebugkey \
+            -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          echo "RELEASE_KEYSTORE=${{ github.workspace }}/debug.keystore" >> $GITHUB_ENV
+          echo "RELEASE_KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
+          echo "RELEASE_KEY_PASSPHRASE=android" >> $GITHUB_ENV
+          echo "RELEASE_KEYSTORE_PASSPHRASE=android" >> $GITHUB_ENV
+
+      # THE IMPORTANT PART:
+      # 1. --write-verification-metadata: Calculates the checksums
+      # 2. --dry-run: fast, doesn't compile code, just resolves libs
+      # 3. Tasks: help (root), zipRelease (app), lint (analysis), test (unit tests)
+      - name: Generate Metadata XML
+        run: |
+          ./gradlew --write-verification-metadata sha256,sha512 --dry-run help zipRelease lintVitalAnalyzeRelease test
+
+      # This uploads the file so you can download it
+      - name: Upload Verification Metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-metadata
+          path: gradle/verification-metadata.xml

@@ -759,6 +759,7 @@ static bool copy_avtab_rules(
 static bool apply_patches(
     policydb_t *pdb,
     bool strip_no_audit,
+    bool is_ksu,
     std::vector<std::string> &errors
 ) {
     const char *source_type = "untrusted_app";
@@ -885,9 +886,24 @@ static bool apply_patches(
     add_safe(target_type, target_type, "anon_inode", "read");
     add_safe(target_type, target_type, "anon_inode", "ioctl");
 
-    //KernalSU patch
-    add_safe(target_type, "android.os.UpdateEngineService", "service_manager", "find");
-    add_safe(target_type, "android.os.UpdateEngineStableService", "service_manager", "find");
+    // --- KernelSU Specific Patch ---
+    // If running on KSU, we also provide permissions to priv_app because
+    // the domain transition to pixelupdater_app is often blocked by OverlayFS.
+    if (is_ksu) {
+        printf("KernelSU detected: Applying compatibility rules for priv_app...\n");
+        const char *ksu_compat_type = "priv_app";
+
+        // Grant binder communication
+        for (auto const &perm : {"call", "transfer"}) {
+            add_safe(ksu_compat_type, "update_engine", "binder", perm);
+            add_safe("update_engine", ksu_compat_type, "binder", perm);
+        }
+
+        // Grant service discovery using exact strings found in service list
+        add_safe(ksu_compat_type, "android.os.UpdateEngineService", "service_manager", "find");
+        add_safe(ksu_compat_type, "android.os.UpdateEngineStableService", "service_manager", "find");
+        add_safe(ksu_compat_type, "update_engine_service", "service_manager", "find");
+    }
 
     if (strip_no_audit) {
         ff(raw_strip_no_audit(pdb) != SELinuxResult::Error);
@@ -900,6 +916,7 @@ static bool patch_sepolicy(
     const std::string &source,
     const std::string &target,
     bool strip_no_audit,
+    bool is_ksu,
     std::vector<std::string> &errors
 ) {
     policydb_t pdb;
@@ -919,7 +936,7 @@ static bool patch_sepolicy(
 
     printf("Policy version: %u\n", pdb.policyvers);
 
-    if (!apply_patches(&pdb, strip_no_audit, errors)) {
+    if (!apply_patches(&pdb, strip_no_audit, is_ksu, errors)) {
         errors.push_back(format("%s: Failed to apply policy patches", source.c_str()));
         return false;
     }
@@ -943,6 +960,7 @@ static void usage(const char *program, FILE *stream)
             "                        Target policy file\n"
             "  -T, --target-kernel   Load patched policy into kernel\n"
             "  -d, --strip-no-audit  Remove dontaudit/dontauditxperm rules\n"
+            "  -k, --ksu             Apply KernelSU compatibility rules for priv_app\n"
             "  -h, --help            Display this help message\n",
             program);
 }
@@ -959,14 +977,16 @@ int main(int argc, char *argv[])
         {"target",         required_argument, nullptr, 't'},
         {"target-kernel",  no_argument,       nullptr, 'T'},
         {"strip-no-audit", no_argument,       nullptr, 'd'},
+        {"ksu",            no_argument,       nullptr, 'k'},
         {"help",           no_argument,       nullptr, 'h'},
         {nullptr, 0, nullptr, 0},
     };
 
-    static const char short_options[] = "s:St:Tdh";
+    static const char short_options[] = "s:St:Tdkh";
 
     int long_index = 0;
     bool strip_no_audit = false;
+    bool is_ksu = false;
 
     while ((opt = getopt_long(
             argc, argv, short_options, long_options, &long_index)) != -1) {
@@ -990,6 +1010,10 @@ int main(int argc, char *argv[])
         case 'd':
             strip_no_audit = true;
             break;
+
+        case 'k':
+            is_ksu = true;
+        break;
 
         case 'h':
             usage(argv[0], stdout);
@@ -1017,7 +1041,7 @@ int main(int argc, char *argv[])
 
     std::vector<std::string> errors;
 
-    if (!patch_sepolicy(source_file, target_file, strip_no_audit, errors)) {
+    if (!patch_sepolicy(source_file, target_file, strip_no_audit, is_ksu, errors)) {
         for (auto it = errors.rbegin(); it != errors.rend(); ++it) {
             fprintf(stderr, "Error: %s\n", it->c_str());
         }

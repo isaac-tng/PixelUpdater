@@ -13,7 +13,10 @@ header Creating pixelupdater_app domain
 
 # Patch SELinux policy with enhanced error handling for QPR2 Beta2 compatibility
 policy_patch_success=false
-if "${mod_dir}"/pixelupdater_selinux -STd; then
+KSU_ARG=""
+[ "$KSU" = "true" ] && KSU_ARG="-k"
+
+if "${mod_dir}"/pixelupdater_selinux -STd $KSU_ARG; then
     policy_patch_success=true
     echo "Success: SELinux policy patched with debug rules stripped"
 else
@@ -78,26 +81,34 @@ header Updating seapp_contexts
 
 seapp_dir=/system/etc/selinux
 seapp_file=${seapp_dir}/plat_seapp_contexts
-mod_seapp_dir=${mod_dir}${seapp_dir}
-mod_seapp_file=${mod_dir}${seapp_file}
 
-rm -rf "${mod_seapp_dir}"
-mkdir -p "${mod_seapp_dir}"
+if [ "$KSU" = "true" ]; then
+    # meta-overlayfs target path
+    mod_seapp_file="/data/adb/modules/.rw/system/upperdir/etc/selinux/plat_seapp_contexts"
+    mkdir -p "$(dirname "$mod_seapp_file")"
 
-# If, for whatever reason, we couldn't wipe the directory, mount a blank tmpfs
-# on top. An outdated file can cause the system to boot loop due to system apps
-# running under the wrong SELinux context.
-if [[ -e "${mod_seapp_file}" ]]; then
-    mount -t tmpfs tmpfs "${mod_seapp_dir}"
+    # Only copy if the file doesn't exist in the RW layer yet
+    if [ ! -f "$mod_seapp_file" ]; then
+        /system/bin/cp -af "$seapp_file" "$mod_seapp_file"
+    fi
+else
+    # Original Magisk target path
+    mod_seapp_dir=${mod_dir}${seapp_dir}
+    mod_seapp_file=${mod_dir}${seapp_file}
+    rm -rf "${mod_seapp_dir}"
+    mkdir -p "${mod_seapp_dir}"
+    if [[ -e "${mod_seapp_file}" ]]; then
+        mount -t tmpfs tmpfs "${mod_seapp_dir}"
+    fi
+    /system/bin/cp --preserve=a "${seapp_file}" "${mod_seapp_file}"
 fi
 
-# Full path because Magisk runs this script in busybox's standalone ash mode and
-# we need Android's toybox version of cp.
-/system/bin/cp --preserve=a "${seapp_file}" "${mod_seapp_file}"
-
-cat >> "${mod_seapp_file}" << EOF
+# Only append if the entry doesn't already exist
+if ! grep -q "name=${app_id}" "${mod_seapp_file}"; then
+    cat >> "${mod_seapp_file}" << EOF
 user=_app isPrivApp=true name=${app_id} domain=pixelupdater_app type=app_data_file levelFrom=all
 EOF
+fi
 
 # Verify seapp_contexts was updated correctly
 echo "Verifying seapp_contexts update..."

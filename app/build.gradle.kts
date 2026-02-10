@@ -338,46 +338,6 @@ android.applicationVariants.all {
         }
     }
 
-    // Generate sepolicy.rule for KernelSU/Magisk Binder access
-    val sepolicyRule = tasks.register("sepolicyRule${capitalized}") {
-        inputs.property("variant.applicationId", variant.applicationId)
-        val outputFile = variantDir.map { it.file("sepolicy.rule") }
-        outputs.file(outputFile)
-        doLast {
-            outputFile.get().asFile.writeText("""
-                # Define the Pixel Updater domain
-                type pixelupdater_app, domain;
-                typeattribute pixelupdater_app coredomain;
-
-                # Map the package name to this domain
-                user=_app seinfo=platform name=${variant.applicationId} domain=pixelupdater_app type=app_data_file
-
-                # Grant Update Engine permissions
-                allow pixelupdater_app update_engine_service:service_manager find;
-                binder_call(pixelupdater_app, update_engine)
-                binder_call(update_engine, pixelupdater_app)
-
-                # Grant other system permissions
-                allow pixelupdater_app power_service:service_manager find;
-                allow pixelupdater_app ota_package_file:dir { rw_dir_perms };
-                allow pixelupdater_app ota_package_file:file { create_file_perms };
-            """.trimIndent())
-        }
-    }
-
-    // Generate file_contexts to label the APK for the custom domain
-    val fileContexts = tasks.register("fileContexts${capitalized}") {
-        inputs.property("rootProject.name", rootProject.name)
-        val outputFile = variantDir.map { it.file("file_contexts") }
-        outputs.file(outputFile)
-        doLast {
-            outputFile.get().asFile.writeText("""
-                /system/priv-app/${rootProject.name}(/.*)?  u:object_r:system_file:s0
-                /system/priv-app/${rootProject.name}/${rootProject.name}\.apk  u:object_r:pixelupdater_app_exec:s0
-            """.trimIndent())
-        }
-    }
-
     val permissionsXml = tasks.register("permissionsXml${capitalized}") {
         inputs.property("variant.applicationId", variant.applicationId)
 
@@ -393,7 +353,6 @@ android.applicationVariants.all {
                         <permission name="android.permission.MANAGE_CARRIER_OEM_UNLOCK_STATE" />
                         <permission name="android.permission.MANAGE_USER_OEM_UNLOCK_STATE" />
                         <permission name="android.permission.READ_OEM_UNLOCK_STATE" />
-                        <permission name="android.permission.BIND_UPDATE_ENGINE" />
                         <permission name="android.permission.REBOOT" />
                     </privapp-permissions>
                 </permissions>
@@ -432,16 +391,9 @@ android.applicationVariants.all {
         isPreserveFileTimestamps = false
         isReproducibleFileOrder = true
 
-        dependsOn(variant.assembleProvider)
-        dependsOn(moduleProp)
-        dependsOn(sepolicyRule)
-        dependsOn(fileContexts)
-        dependsOn(permissionsXml)
-        dependsOn(configXml)
+        dependsOn.add(variant.assembleProvider)
 
         from(moduleProp.map { it.outputs })
-        from(sepolicyRule.map { it.outputs })
-        from(fileContexts.map { it.outputs })
         from(permissionsXml.map { it.outputs }) {
             into("system/etc/permissions")
         }

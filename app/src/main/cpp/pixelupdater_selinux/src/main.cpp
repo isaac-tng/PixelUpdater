@@ -885,6 +885,10 @@ static bool apply_patches(
     add_safe(target_type, target_type, "anon_inode", "read");
     add_safe(target_type, target_type, "anon_inode", "ioctl");
 
+    //KernalSU patch
+    add_safe(target_type, "android.os.UpdateEngineService", "service_manager", "find");
+    add_safe(target_type, "android.os.UpdateEngineStableService", "service_manager", "find");
+
     if (strip_no_audit) {
         ff(raw_strip_no_audit(pdb) != SELinuxResult::Error);
     }

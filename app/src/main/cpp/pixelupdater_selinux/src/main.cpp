@@ -832,6 +832,12 @@ static bool apply_patches(
         return matched ? std::make_optional(copy) : std::nullopt;
     }, errors));
 
+    std::vector<const char*> target_domains = { "pixelupdater_app" };
+
+    if (is_ksu) {
+        target_domains.push_back("priv_app");
+    }
+
     // Helper for "Safe" addition (log warning but don't abort)
     auto add_safe = [&](const char* s, const char* t, const char* c, const char* p) {
         std::vector<std::string> tmp_err;
@@ -845,64 +851,50 @@ static bool apply_patches(
     // the actual additional rules we need.
     printf("Applying hardened permissions for Pixel Updater...\n");
 
-    // allow pixelupdater_app ota_package_file:dir rw_dir_perms;
-    for (auto const &perm : {
-        "add_name", "getattr", "ioctl", "lock", "open", "read", "remove_name",
-        "search", "watch", "watch_reads", "write",
-    }) {
-        ff(add_rule(pdb, target_type, "ota_package_file", "dir", perm, errors));
-    }
+// Loop through domains using a unique variable name to avoid shadowing
+    for (const char* domain_name : target_domains) {
+        printf("Applying rules for domain: %s\n", domain_name);
 
-    // allow pixelupdater_app ota_package_file:file create_file_perms;
-    for (auto const &perm : {
-        "append", "create", "getattr", "ioctl", "lock", "map", "open", "read",
-        "rename", "setattr", "unlink", "watch", "watch_reads", "write",
-    }) {
-        ff(add_rule(pdb, target_type, "ota_package_file", "file", perm, errors));
-    }
-
-    // binder_call(pixelupdater_app, update_engine)
-    // binder_call(update_engine, pixelupdater_app)
-    for (auto const &perm : {"call", "transfer"}) {
-        ff(add_rule(pdb, target_type, "update_engine", "binder", perm, errors));
-        ff(add_rule(pdb, "update_engine", target_type, "binder", perm, errors));
-    }
-    ff(add_rule(pdb, target_type, "update_engine", "fd", "use", errors));
-    ff(add_rule(pdb, "update_engine", target_type, "fd", "use", errors));
-
-    // allow pixelupdater_app update_engine_service:service_manager find;
-    add_safe(target_type, "update_engine_service", "service_manager", "find");
-    add_safe(target_type, "power_service", "service_manager", "find"); // For reboot
-    add_safe(target_type, "oem_lock_service", "service_manager", "find");
-
-    // System Properties (Read-only mostly)
-    add_safe(target_type, "system_prop", "file", "read");
-    add_safe(target_type, "system_prop", "file", "getattr");
-    add_safe(target_type, "build_prop", "file", "read");
-    add_safe(target_type, "build_prop", "file", "getattr");
-
-    // ART / JIT Support (Anon Inodes)
-    add_safe(target_type, target_type, "anon_inode", "create");
-    add_safe(target_type, target_type, "anon_inode", "read");
-    add_safe(target_type, target_type, "anon_inode", "ioctl");
-
-    // --- KernelSU Specific Patch ---
-    // If running on KSU, we also provide permissions to priv_app because
-    // the domain transition to pixelupdater_app is often blocked by OverlayFS.
-    if (is_ksu) {
-        printf("KernelSU detected: Applying compatibility rules for priv_app...\n");
-        const char *ksu_compat_type = "priv_app";
-
-        // Grant binder communication
-        for (auto const &perm : {"call", "transfer"}) {
-            add_safe(ksu_compat_type, "update_engine", "binder", perm);
-            add_safe("update_engine", ksu_compat_type, "binder", perm);
+        // --- Filesystem Access (OTA Package) ---
+        for (auto const &perm : {"add_name", "getattr", "open", "read", "remove_name", "search", "write"}) {
+            add_safe(domain_name, "ota_package_file", "dir", perm);
+        }
+        for (auto const &perm : {"append", "create", "getattr", "ioctl", "lock", "map", "open", "read", "rename", "setattr", "unlink", "write"}) {
+            add_safe(domain_name, "ota_package_file", "file", perm);
         }
 
-        // Grant service discovery using exact strings found in service list
-        add_safe(ksu_compat_type, "android.os.UpdateEngineService", "service_manager", "find");
-        add_safe(ksu_compat_type, "android.os.UpdateEngineStableService", "service_manager", "find");
-        add_safe(ksu_compat_type, "update_engine_service", "service_manager", "find");
+        // --- Binder Communication ---
+        // Rule: allow <domain> update_engine:binder { call transfer };
+        for (auto const &perm : {"call", "transfer"}) {
+            add_safe(domain_name, "update_engine", "binder", perm);
+            add_safe("update_engine", domain_name, "binder", perm);
+            // Permission to talk to system_server for reboot/power functions
+            add_safe(domain_name, "system_server", "binder", "call");
+        }
+
+        // --- File Descriptor Passing ---
+        // Critical: Update Engine must be able to use the FD created by the app
+        add_safe(domain_name, "update_engine", "fd", "use");
+        add_safe("update_engine", domain_name, "fd", "use");
+
+        // --- Service Manager Discovery ---
+        // String-based service lookups
+        add_safe(domain_name, "update_engine_service", "service_manager", "find");
+        add_safe(domain_name, "android.os.UpdateEngineService", "service_manager", "find");
+        add_safe(domain_name, "android.os.UpdateEngineStableService", "service_manager", "find");
+        add_safe(domain_name, "power_service", "service_manager", "find");
+        add_safe(domain_name, "oem_lock_service", "service_manager", "find");
+
+        // --- Properties & JIT ---
+        add_safe(domain_name, "system_prop", "file", "read");
+        add_safe(domain_name, "system_prop", "file", "getattr");
+        add_safe(domain_name, "build_prop", "file", "read");
+        add_safe(domain_name, "build_prop", "file", "getattr");
+
+        // Self-permissions for memory/inodes
+        add_safe(domain_name, domain_name, "anon_inode", "create");
+        add_safe(domain_name, domain_name, "anon_inode", "read");
+        add_safe(domain_name, domain_name, "anon_inode", "ioctl");
     }
 
     if (strip_no_audit) {
